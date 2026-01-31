@@ -40,21 +40,35 @@ int main() {
 
     startFunctionInlining(module->functions());
 
-    std::unordered_set<BasicBlock*> unreachableBlocks;
-    for (auto &function : module->functions()) {
-        if (function.isDeclaration()) continue;
-        for (auto it = function.begin(); it != function.end(); it++){
-            BasicBlock &block = *it;
+    std::unordered_set<Function*> unreachableFunctions;
+    for (auto it = module->begin(); it != module->end();) {
+        Function &function = *it;
+        if (function.isDeclaration()) {
+            ++it;
+            continue;
+        }
+
+        for (auto blockIt = function.begin(); blockIt != function.end();){
+            BasicBlock &block = *blockIt;
             if (isa<UnreachableInst>(block.back())){
                 if (simplifyUnreachableUsages(&block)) {
-                    unreachableBlocks.insert(&block);
+                    auto n = std::next(blockIt);
+                    blockIt->eraseFromParent();
+                    blockIt = n;
+                    continue;
                 }
             }
+            ++blockIt;
         }
-    }
 
-    for (auto &block : unreachableBlocks) {
-        block->removeFromParent();
+        // Delete functions that have no blocks and aren't declarations.
+        if (std::distance(function.begin(), function.end()) == 0) {
+            auto n = std::next(it);
+            function.eraseFromParent();
+            it = n;
+            continue;
+        }
+        ++it;
     }
 
     std::error_code a;
@@ -86,7 +100,11 @@ bool simplifyUnreachableUsages(BasicBlock *block) {
             })
             .Default([&](Value *other) {});
     }
-    return convertedAnyInstructions;
+
+    // While the simplification on the br instr will stay, we don't remove
+    // this block if there exists any users.
+    auto it = block->users();
+    return std::distance(it.begin(), it.end()) == 0;
 }
 
 /**
